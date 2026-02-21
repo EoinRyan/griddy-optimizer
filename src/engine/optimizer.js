@@ -197,15 +197,15 @@ export function evaluateCandidates(board, candidates, currentRound, seenPlayerKe
         for (const arr of arrangements) {
             const score = calculateScore(arr.board);
 
-            // Calculate EV bonus for future rounds based on chemistry potential
-            let chemPotential = 0;
+            // Calculate EV bonus: expected talent + chemistry from future picks
+            // This creates opportunity cost: filling a slot now means losing its future EV
+            let futureEV = 0;
             if (currentRound < 9) {
-                const empties = getEmptySlots(arr.board);
-                chemPotential = estimateChemPotential(arr.board, empties, seenPlayerKeys);
+                futureEV = estimateFutureEV(arr.board, currentRound + 1, seenPlayerKeys);
             }
 
-            // EV = immediate score + estimated future chemistry gains
-            const totalEV = score.total + chemPotential;
+            // EV = immediate score + estimated future value of remaining slots
+            const totalEV = score.total + futureEV;
 
             if (totalEV > bestEV) {
                 bestEV = totalEV;
@@ -213,7 +213,7 @@ export function evaluateCandidates(board, candidates, currentRound, seenPlayerKe
                     board: arr.board,
                     newSlot: arr.newSlot,
                     immediateScore: score,
-                    chemPotential,
+                    futureEV,
                     ev: totalEV,
                 };
             }
@@ -234,74 +234,88 @@ export function evaluateCandidates(board, candidates, currentRound, seenPlayerKe
     return results;
 }
 
-// Estimate chemistry potential for empty slots based on remaining pool
-// Weighted by slot probability: the game randomly picks one open slot,
-// so each slot's contribution is weighted by 1/totalEmptySlots
-function estimateChemPotential(board, emptySlots, seenPlayerKeys) {
+// Estimate total future EV for all remaining empty slots
+// Includes BOTH expected talent AND expected chemistry from future picks.
+// This creates proper opportunity cost: filling a high-connection slot now
+// means losing its future EV, naturally normalizing the QB/TE bias.
+// Each slot is weighted by 1/totalEmptySlots (game randomly picks one slot).
+function estimateFutureEV(board, forRound, seenPlayerKeys) {
+    const emptySlots = getEmptySlots(board);
     if (emptySlots.length === 0) return 0;
 
     const slotProb = 1 / emptySlots.length;
-    let potential = 0;
+    const odds = DRAFT_ODDS[Math.min(forRound, 9)];
+    let totalFutureEV = 0;
 
     for (const emptySlot of emptySlots) {
+        const pos = POSITIONS[emptySlot];
         const neighbors = getNeighbors(emptySlot);
         const occupiedNeighbors = neighbors.filter(n => board.slots[n] !== null);
 
-        if (occupiedNeighbors.length === 0) continue;
-
-        // Collect attributes of all occupied neighbors
-        const teams = new Set();
-        const divs = new Set();
-        const years = new Set();
-
-        for (const n of occupiedNeighbors) {
-            const player = board.slots[n];
-            teams.add(player.team);
-            divs.add(player.div);
-            years.add(player.draftYear);
-        }
-
-        // Count available pool players that could fill this slot AND share attributes
-        const pos = POSITIONS[emptySlot];
-        let greenMatches = 0; // same team or same div+year
-        let yellowMatches = 0; // same div or same year (but not green)
-
-        const poolPlayers = ALL_PLAYERS.filter(p => {
+        // Pool of players that fit this specific slot
+        const slotPool = ALL_PLAYERS.filter(p => {
             if (seenPlayerKeys.has(getBasePlayerKey(p))) return false;
-            if (!pos.accepts.includes(p.pos)) return false;
-            return true;
+            return pos.accepts.includes(p.pos);
         });
 
-        const totalPool = poolPlayers.length || 1;
+        if (slotPool.length === 0) continue;
 
-        for (const p of poolPlayers) {
-            const sameTeam = teams.has(p.team);
-            const sameDiv = divs.has(p.div);
-            const sameYear = years.has(p.draftYear);
+        // 1. Expected TALENT from a future pick in this slot
+        let expectedTalent = 0;
+        if (odds) {
+            const byRarity = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+            for (const p of slotPool) byRarity[p.skill]++;
 
-            if (sameTeam || (sameDiv && sameYear)) {
-                greenMatches++;
-            } else if (sameDiv || sameYear) {
-                yellowMatches++;
+            for (let r = 5; r >= 1; r--) {
+                if (byRarity[r] === 0) continue;
+                const poolProportion = byRarity[r] / slotPool.length;
+                expectedTalent += odds[5 - r] * TALENT_VALUES[r] * poolProportion;
             }
         }
 
-        // Expected chemistry points from this empty slot's connections
-        // Weight by probability of getting a matching player
-        const greenProb = greenMatches / totalPool;
-        const yellowProb = yellowMatches / totalPool;
+        // 2. Expected CHEMISTRY from a future pick in this slot
+        let expectedChem = 0;
+        if (occupiedNeighbors.length > 0) {
+            const teams = new Set();
+            const divs = new Set();
+            const years = new Set();
 
-        // Expected connection points per neighbor: green=2, yellow=1
-        const expectedConnPoints = (greenProb * 2 + yellowProb * 1) * occupiedNeighbors.length;
+            for (const n of occupiedNeighbors) {
+                const player = board.slots[n];
+                teams.add(player.team);
+                divs.add(player.div);
+                years.add(player.draftYear);
+            }
 
-        // Also estimate dot contribution
-        const expectedDotPoints = greenProb * 6 + yellowProb * 2;
+            let greenMatches = 0;
+            let yellowMatches = 0;
 
-        // Weight by the probability this slot gets chosen by the game
-        potential += (expectedConnPoints + expectedDotPoints) * slotProb;
+            for (const p of slotPool) {
+                const sameTeam = teams.has(p.team);
+                const sameDiv = divs.has(p.div);
+                const sameYear = years.has(p.draftYear);
+
+                if (sameTeam || (sameDiv && sameYear)) {
+                    greenMatches++;
+                } else if (sameDiv || sameYear) {
+                    yellowMatches++;
+                }
+            }
+
+            const greenProb = greenMatches / slotPool.length;
+            const yellowProb = yellowMatches / slotPool.length;
+
+            // Connection points (real count of occupied neighbors)
+            expectedChem += (greenProb * 2 + yellowProb * 1) * occupiedNeighbors.length;
+            // Dot points
+            expectedChem += greenProb * 6 + yellowProb * 2;
+        }
+
+        // Weight by probability this slot gets chosen
+        totalFutureEV += (expectedTalent + expectedChem) * slotProb;
     }
 
-    return potential;
+    return totalFutureEV;
 }
 
 // ===== POSITION STRATEGY =====
@@ -410,74 +424,7 @@ export function suggestPreRoundArrangement(board, nextRound, seenPlayerKeys) {
     };
 }
 
-// Score an arrangement by the expected quality of players offered
-// Uses per-slot probability: game randomly picks one empty slot, then generates
-// 3 players for that slot. Each slot is weighted by 1/totalEmptySlots.
+// Score an arrangement by expected future value (reuses estimateFutureEV)
 function scoreArrangementForPool(board, nextRound, seenPlayerKeys) {
-    const odds = DRAFT_ODDS[nextRound];
-    if (!odds) return 0;
-
-    const emptySlots = getEmptySlots(board);
-    if (emptySlots.length === 0) return 0;
-
-    const slotProb = 1 / emptySlots.length;
-    let totalEV = 0;
-
-    // Evaluate each empty slot independently, weighted by its selection probability
-    for (const emptySlot of emptySlots) {
-        const pos = POSITIONS[emptySlot];
-
-        // Get the pool of players that fit THIS specific slot
-        const slotPool = ALL_PLAYERS.filter(p => {
-            if (seenPlayerKeys.has(getBasePlayerKey(p))) return false;
-            return pos.accepts.includes(p.pos);
-        });
-
-        if (slotPool.length === 0) continue;
-
-        // Expected talent for this slot's pool
-        let slotTalentEV = 0;
-        const byRarity = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
-        for (const p of slotPool) byRarity[p.skill]++;
-        const total = slotPool.length;
-
-        for (let r = 5; r >= 1; r--) {
-            if (byRarity[r] === 0) continue;
-            const poolProportion = byRarity[r] / total;
-            slotTalentEV += odds[5 - r] * TALENT_VALUES[r] * poolProportion * total;
-        }
-        slotTalentEV = slotTalentEV / (total || 1);
-
-        // Chemistry potential for this specific slot
-        let slotChemEV = 0;
-        const neighbors = getNeighbors(emptySlot);
-        const occupiedNeighbors = neighbors.filter(n => board.slots[n] !== null);
-
-        if (occupiedNeighbors.length > 0) {
-            const teams = new Set();
-            const divs = new Set();
-            const years = new Set();
-            for (const n of occupiedNeighbors) {
-                const player = board.slots[n];
-                teams.add(player.team);
-                divs.add(player.div);
-                years.add(player.draftYear);
-            }
-
-            let matches = 0;
-            for (const p of slotPool) {
-                if (teams.has(p.team) || divs.has(p.div) || years.has(p.draftYear)) {
-                    matches++;
-                }
-            }
-
-            const matchRate = matches / slotPool.length;
-            slotChemEV = matchRate * occupiedNeighbors.length * 2;
-        }
-
-        // Weight this slot's EV by its probability of being chosen
-        totalEV += (slotTalentEV + slotChemEV) * slotProb;
-    }
-
-    return totalEV;
+    return estimateFutureEV(board, nextRound, seenPlayerKeys);
 }

@@ -275,7 +275,7 @@ function renderRecommendations() {
     const rec = state.recommendations[i];
     const rank = i === 0 ? 'Best Pick' : i === 1 ? '2nd Choice' : '3rd Choice';
     const pos = POSITIONS[rec.newSlot];
-    const chemPot = rec.chemPotential ? rec.chemPotential.toFixed(1) : '0.0';
+    const futureEVDisplay = rec.futureEV ? rec.futureEV.toFixed(1) : '0.0';
     const evDisplay = rec.ev.toFixed(1);
 
     html += `
@@ -288,7 +288,7 @@ function renderRecommendations() {
         <div class="rec-details">
           <span class="rec-detail-item">Slot: ${pos.label} [${pos.row}][${pos.col}]</span>
           <span class="rec-detail-item">Score: ${rec.immediateScore.total}</span>
-          <span class="rec-detail-item">Future Chem: +${chemPot}</span>
+          <span class="rec-detail-item">Future EV: +${futureEVDisplay}</span>
         </div>
       </div>
     `;
