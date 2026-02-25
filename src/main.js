@@ -392,14 +392,28 @@ function setupEventListeners() {
     });
   }
 
-  // Optimize positions for next round
+  // Optimize positions for next round (also advances the round)
   const arrangeBtn = document.getElementById('btn-arrange');
   if (arrangeBtn) {
     arrangeBtn.addEventListener('click', () => {
       const nextRound = state.round; // Suggest for current round's offerings
       const result = suggestPreRoundArrangement(state.board, nextRound, state.seenPlayerKeys);
       state.board = result.board;
+
+      // Mark all current candidates as seen
+      for (const candidate of state.candidates) {
+        if (candidate) {
+          state.seenPlayerKeys.add(getBasePlayerKey(candidate));
+        }
+      }
+
+      // Advance round
+      state.round++;
+      state.candidates = [null, null, null];
       state.recommendations = [];
+      state.pickApplied = false;
+      state.swapSource = null;
+
       render();
     });
   }
