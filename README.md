@@ -7,9 +7,9 @@ A real-time draft advisor for the **Griddy** football puzzle game. Input the thr
 Griddy is a 9-round draft game played on a 3-row grid:
 
 ```
-Row 1:  [ RB ]         [ WR ]
+Row 1:      [ RB ]         [ WR ]
 Row 2:  [ FLX ] [ QB ] [ QB ] [ FLX ]
-Row 3:  [ WR ]  [ TE ] [ RB ]
+Row 3:      [ WR ]  [ TE ] [ RB ]
 ```
 
 Each round you're shown 3 random NFL players. You pick one and place them in a valid slot. Adjacent players score **chemistry points** based on shared attributes (team, division, draft year), and each player earns **talent points** based on their rarity tier.
